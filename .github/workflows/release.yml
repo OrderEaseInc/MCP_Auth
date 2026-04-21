@@ -54,7 +54,7 @@ jobs:
               --secrets \
                 "ConnectionStrings__ActiveConnection=${{ secrets.CONNECTIONSTRINGS__ACTIVECONNECTION }}" \
                 "ConnectionStrings__RedisConnection=${{ secrets.CONNECTIONSTRINGS__REDISCONNECTION }}" \
-                "DabJwt__RsaPrivateKeyPemBase64=${{ secrets.ENTRA_JWT_ISSUER }}" 
+                "DabJwt__RsaPrivateKeyPemBase64=${{ secrets.DABJWT__RSAPRIVATEKEYPEMBASE64 }}" 
 
       - name: Deploy to Azure Container Apps
         uses: azure/container-apps-deploy-action@v1

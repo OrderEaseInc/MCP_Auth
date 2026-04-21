@@ -72,7 +72,7 @@ public class EntraIdTokenService : IEntraIdTokenService, IDisposable
             new(JwtRegisteredClaimNames.Iat,
                 new DateTimeOffset(now).ToUnixTimeSeconds().ToString(),
                 ClaimValueTypes.Integer64),
-            new("roles", role),
+            new("roles", $"[\"{role}\"]", JsonClaimValueTypes.JsonArray),
             new("userRole", role),
         };
 

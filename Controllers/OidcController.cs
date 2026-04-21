@@ -45,6 +45,7 @@ public class OidcController : ControllerBase
             issuer                              = config.Issuer,
             authorization_endpoint              = $"{baseUrl}/oauth/authorize",
             token_endpoint                      = config.TokenEndpoint,
+            registration_endpoint               = $"{baseUrl}/oauth/register",
             jwks_uri                            = config.JwksUri,
             response_types_supported            = new[] { "code" },
             grant_types_supported               = new[] { "authorization_code" },

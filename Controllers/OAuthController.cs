@@ -15,7 +15,8 @@ namespace OrderEase.DabProxy.Controllers;
 [ApiController]
 public class OAuthController : ControllerBase
 {
-    private static readonly TimeSpan CodeLifetime = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan CodeLifetime   = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan ClientLifetime = TimeSpan.FromDays(30);
 
     // Company 1 is the internal OrderEase admin tenant.
     private const int AdminCompanyId = 1;
@@ -44,16 +45,15 @@ public class OAuthController : ControllerBase
         [FromQuery(Name = "response_type")]          string responseType,
         [FromQuery(Name = "client_id")]              string clientId,
         [FromQuery(Name = "redirect_uri")]           string redirectUri,
-        [FromQuery(Name = "code_challenge")]         string codeChallenge,
-        [FromQuery(Name = "code_challenge_method")]  string codeChallengeMethod,
-        [FromQuery(Name = "state")]                  string state,
+        [FromQuery(Name = "code_challenge")]         string? codeChallenge = null,
+        [FromQuery(Name = "code_challenge_method")]  string? codeChallengeMethod = null,
+        [FromQuery(Name = "state")]                  string? state = null,
         [FromQuery(Name = "resource")]               string? resource = null)
     {
         if (responseType != "code")
             return BadRequest(new { error = "unsupported_response_type" });
 
-        if (string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(redirectUri) ||
-            string.IsNullOrEmpty(codeChallenge) || string.IsNullOrEmpty(state))
+        if (string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(redirectUri))
             return BadRequest(new { error = "invalid_request" });
 
         return Content(
@@ -72,9 +72,9 @@ public class OAuthController : ControllerBase
         [FromForm(Name = "api_key")]                 string apiKey,
         [FromForm(Name = "client_id")]               string clientId,
         [FromForm(Name = "redirect_uri")]            string redirectUri,
-        [FromForm(Name = "code_challenge")]          string codeChallenge,
-        [FromForm(Name = "code_challenge_method")]   string codeChallengeMethod,
-        [FromForm(Name = "state")]                   string state,
+        [FromForm(Name = "code_challenge")]          string? codeChallenge = null,
+        [FromForm(Name = "code_challenge_method")]   string? codeChallengeMethod = null,
+        [FromForm(Name = "state")]                   string? state = null,
         [FromForm(Name = "resource")]                string? resource = null,
         CancellationToken ct = default)
     {
@@ -146,7 +146,8 @@ public class OAuthController : ControllerBase
         if (entry.ClientId != clientId || entry.RedirectUri != redirectUri)
             return BadRequest(new { error = "invalid_grant", error_description = "client_id or redirect_uri mismatch." });
 
-        if (!VerifyPkce(codeVerifier, entry.CodeChallenge, entry.CodeChallengeMethod))
+        if (!string.IsNullOrEmpty(entry.CodeChallenge) &&
+            !VerifyPkce(codeVerifier, entry.CodeChallenge, entry.CodeChallengeMethod))
             return BadRequest(new { error = "invalid_grant", error_description = "PKCE verification failed." });
 
         var extraClaims = new[]
@@ -170,6 +171,41 @@ public class OAuthController : ControllerBase
 
     // ------------------------------------------------------------------ //
 
+    /// <summary>
+    /// RFC 7591 Dynamic Client Registration — registers a new public OAuth client.
+    /// Returns a client_id that can immediately be used in the authorization flow.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpPost("oauth/register")]
+    [Consumes("application/json")]
+    public async Task<IActionResult> Register(
+        [FromBody] ClientRegistrationRequest request,
+        CancellationToken ct = default)
+    {
+        if (request.RedirectUris is not { Length: > 0 })
+            return BadRequest(new { error = "invalid_client_metadata", error_description = "redirect_uris is required." });
+
+        var clientId = Guid.NewGuid().ToString("N");
+
+        await _cache.SetAsync(
+            $"oauth_client:{clientId}",
+            JsonSerializer.SerializeToUtf8Bytes(new { clientId, request.RedirectUris, request.ClientName }),
+            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = ClientLifetime },
+            ct);
+
+        return Ok(new
+        {
+            client_id                  = clientId,
+            redirect_uris              = request.RedirectUris,
+            client_name                = request.ClientName,
+            grant_types                = new[] { "authorization_code" },
+            response_types             = new[] { "code" },
+            token_endpoint_auth_method = "none",
+        });
+    }
+
+    // ------------------------------------------------------------------ //
+
     private static bool VerifyPkce(string codeVerifier, string codeChallenge, string method)
     {
         if (string.IsNullOrEmpty(codeVerifier) || method != "S256")
@@ -181,8 +217,8 @@ public class OAuthController : ControllerBase
     }
 
     private static string BuildLoginHtml(
-        string clientId, string redirectUri, string codeChallenge, string? codeChallengeMethod,
-        string state, string? resource, string? error = null)
+        string clientId, string redirectUri, string? codeChallenge, string? codeChallengeMethod,
+        string? state, string? resource, string? error = null)
     {
         static string H(string? s) => WebUtility.HtmlEncode(s ?? "");
 
@@ -237,12 +273,16 @@ public class OAuthController : ControllerBase
             """;
     }
 
+    public sealed record ClientRegistrationRequest(
+        [property: System.Text.Json.Serialization.JsonPropertyName("redirect_uris")]  string[]? RedirectUris,
+        [property: System.Text.Json.Serialization.JsonPropertyName("client_name")]    string?   ClientName);
+
     private sealed record AuthCodeEntry(
         int     UserId,
         int     CompanyId,
         string  ClientId,
         string  RedirectUri,
-        string  CodeChallenge,
+        string? CodeChallenge,
         string  CodeChallengeMethod,
         string? Resource);
 }

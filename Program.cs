@@ -100,12 +100,17 @@ builder.Services.AddReverseProxy().LoadFromMemory(routes, clusters);
 // ── Build ───────────────────────────────────────────────────────────────────
 var app = builder.Build();
 
-// Trust X-Forwarded-For / X-Forwarded-Proto from the container ingress so that
-// Request.Scheme and Request.Host are correct in the OIDC discovery document.
-app.UseForwardedHeaders(new ForwardedHeadersOptions
+// Clear KnownIPNetworks/KnownProxies so Azure Container Apps ingress headers
+// are trusted. Without this only loopback is trusted, Request.Scheme stays
+// "http", OIDC discovery advertises http:// endpoints, Azure redirects to
+// https://, and POST→GET on the redirect converts token exchange to a GET.
+var forwardedOptions = new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
-});
+};
+forwardedOptions.KnownIPNetworks.Clear();
+forwardedOptions.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedOptions);
 
 app.UseCors(CorsPolicyName);
 app.UseAuthentication();

@@ -19,8 +19,9 @@ builder.Services.AddSingleton<IUserRepository, UserRepository>();
 // Config key: ConnectionStrings:RedisConnection  (env: ConnectionStrings__RedisConnection)
 builder.Services.AddStackExchangeRedisCache(options =>
 {
-    options.Configuration = builder.Configuration.GetConnectionString("RedisConnection");
-    options.InstanceName  = "DabProxy";
+    options.Configuration = builder.Configuration["ConnectionStrings:RedisConnection"]
+        ?? throw new InvalidOperationException("ConnectionStrings:RedisConnection is required.");
+    options.InstanceName = "DabProxy";
 });
 
 // ── JWT Bearer auth (validates tokens issued by this service) ────────────────
@@ -30,13 +31,13 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     {
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            ValidateIssuer           = true,
-            ValidIssuer              = builder.Configuration["DabJwt:Issuer"] ?? "https://api.orderease.com",
-            ValidateAudience         = true,
-            ValidAudience            = builder.Configuration["DabJwt:Audience"] ?? "dab",
-            ValidateLifetime         = true,
+            ValidateIssuer = true,
+            ValidIssuer = builder.Configuration["DabJwt:Issuer"] ?? "https://api.orderease.com",
+            ValidateAudience = true,
+            ValidAudience = builder.Configuration["DabJwt:Audience"] ?? "dab",
+            ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            IssuerSigningKey         = tokenService.GetSigningKey(),
+            IssuerSigningKey = tokenService.GetSigningKey(),
         };
     });
 

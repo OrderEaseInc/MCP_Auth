@@ -21,7 +21,7 @@ public class UserRepository : IUserRepository
     public UserRepository(IConfiguration configuration)
     {
         // Database connection: ConnectionStrings:ActiveConnection (env: ConnectionStrings__ActiveConnection)
-        _connectionString = configuration.GetConnectionString("ActiveConnection")
+        _connectionString = configuration["ConnectionStrings:ActiveConnection"]
             ?? throw new InvalidOperationException("ConnectionStrings:ActiveConnection is required.");
     }
 

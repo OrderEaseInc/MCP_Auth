@@ -50,7 +50,10 @@ jobs:
             az containerapp secret set \
               --name ${{ env.CONTAINER_APP_NAME }} \
               --resource-group ${{ env.RESOURCE_GROUP }} \
-              --secrets "db-conn=${{ secrets.DB_CONNECTION_STRING }}"
+              --secrets \
+                "ConnectionStrings__ActiveConnection=${{ secrets.CONNECTIONSTRINGS__ACTIVECONNECTION }}" \
+                "ConnectionStrings__RedisConnection=${{ secrets.CONNECTIONSTRINGS__REDISCONNECTION }}" \
+                "DabJwt__RsaPrivateKeyPemBase64=${{ secrets.ENTRA_JWT_ISSUER }}" 
 
 #      - name: Deploy to Azure Container Apps
 #        uses: azure/container-apps-deploy-action@v1

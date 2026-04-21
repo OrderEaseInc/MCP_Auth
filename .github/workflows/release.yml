@@ -52,9 +52,9 @@ jobs:
               --name ${{ env.CONTAINER_APP_NAME }} \
               --resource-group ${{ env.RESOURCE_GROUP }} \
               --secrets \
-                "ConnectionStrings__ActiveConnection=${{ secrets.CONNECTIONSTRINGS__ACTIVECONNECTION }}" \
-                "ConnectionStrings__RedisConnection=${{ secrets.CONNECTIONSTRINGS__REDISCONNECTION }}" \
-                "DabJwt__RsaPrivateKeyPemBase64=${{ secrets.DABJWT__RSAPRIVATEKEYPEMBASE64 }}" 
+                "ConnectionStringsActiveConnection=${{ secrets.CONNECTIONSTRINGS__ACTIVECONNECTION }}" \
+                "ConnectionStringsRedisConnection=${{ secrets.CONNECTIONSTRINGS__REDISCONNECTION }}" \
+                "DabJwtRsaPrivateKeyPemBase64=${{ secrets.DABJWT__RSAPRIVATEKEYPEMBASE64 }}" 
 
       - name: Deploy to Azure Container Apps
         uses: azure/container-apps-deploy-action@v1
@@ -64,8 +64,8 @@ jobs:
           containerAppName: ${{ env.CONTAINER_APP_NAME }}
           containerAppEnvironment: ${{ env.APP_ENVIRONMENT }}
           environmentVariables: >-
-            ConnectionStrings__ActiveConnection=secretref:ConnectionStrings__ActiveConnection
-            ConnectionStrings__RedisConnection=secretref:ConnectionStrings__RedisConnection
+            ConnectionStrings__ActiveConnection=secretref:ConnectionStringsActiveConnection
+            ConnectionStrings__RedisConnection=secretref:ConnectionStringsRedisConnection
             McpProxy__DestinationUrl=${{ secrets.MCPPROXY__DESTINATIONURL }}
             DabJwt__Issuer=${{ secrets.DABJWT__ISSUER }}
-            DabJwt__RsaPrivateKeyPemBase64=secretref:DabJwt__RsaPrivateKeyPemBase64
+            DabJwt__RsaPrivateKeyPemBase64=secretref:DabJwtRsaPrivateKeyPemBase64

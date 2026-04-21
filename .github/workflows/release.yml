@@ -38,20 +38,20 @@ jobs:
 #          build-args: |
 #            arg=${{ secrets.SECRET_NAME }}
 
-#      - name: Azure Login
-#        uses: azure/login@v2
-#        with:
-#          creds: ${{ secrets.AZURE_CREDENTIALS }}
-#
-#      - name: Set Connection String Secret
-#        uses: azure/CLI@v2
-#        with:
-#          inlineScript: |
-#            az containerapp secret set \
-#              --name ${{ env.CONTAINER_APP_NAME }} \
-#              --resource-group ${{ env.RESOURCE_GROUP }} \
-#              --secrets "db-conn=${{ secrets.DB_CONNECTION_STRING }}"
-#
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set Connection String Secret
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            az containerapp secret set \
+              --name ${{ env.CONTAINER_APP_NAME }} \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --secrets "db-conn=${{ secrets.DB_CONNECTION_STRING }}"
+
 #      - name: Deploy to Azure Container Apps
 #        uses: azure/container-apps-deploy-action@v1
 #        with:

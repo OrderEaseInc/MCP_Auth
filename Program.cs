@@ -43,6 +43,19 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
+// ── CORS — browser-based MCP clients (e.g. MCP Inspector) make cross-origin
+//    requests to these endpoints, so we allow any origin without credentials.
+const string CorsPolicyName = "OAuthPublic";
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(CorsPolicyName, policy =>
+    {
+        policy.AllowAnyOrigin()
+              .WithMethods("GET", "POST")
+              .WithHeaders("Content-Type", "Authorization");
+    });
+});
+
 // ── Controllers (no camelCase — OIDC spec requires snake_case property names) ─
 builder.Services.AddControllers().AddJsonOptions(opts =>
 {
@@ -94,6 +107,7 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
 });
 
+app.UseCors(CorsPolicyName);
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

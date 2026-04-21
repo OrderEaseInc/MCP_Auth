@@ -73,6 +73,7 @@ public class EntraIdTokenService : IEntraIdTokenService, IDisposable
                 new DateTimeOffset(now).ToUnixTimeSeconds().ToString(),
                 ClaimValueTypes.Integer64),
             new("roles", role),
+            new("userRole", role),
         };
 
         if (extraClaims != null) claims.AddRange(extraClaims);

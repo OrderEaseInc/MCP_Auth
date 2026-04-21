@@ -7,9 +7,10 @@ on:
 
 env:
   AZURE_CONTAINER_REGISTRY: orderease
-  CONTAINER_APP_NAME: oe-mcp-auth
+  ACR_REPOSITORY_NAME: oe-mcp-auth
   RESOURCE_GROUP: dashboards
   APP_ENVIRONMENT: oe-sales-dashboards
+  CONTAINER_APP_NAME: oe-mcp-auth-staging
 
 jobs:
   build-and-deploy:
@@ -32,7 +33,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.CONTAINER_APP_NAME }}:latest
+          tags: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.ACR_REPOSITORY_NAME }}:latest
           file: Dockerfile
           provenance: false
 #          build-args: |
@@ -43,25 +44,28 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-#      - name: Set Connection String Secret
-#        uses: azure/CLI@v2
-#        with:
-#          inlineScript: |
-#            az containerapp secret set \
-#              --name ${{ env.CONTAINER_APP_NAME }} \
-#              --resource-group ${{ env.RESOURCE_GROUP }} \
-#              --secrets \
-#                "ConnectionStrings__ActiveConnection=${{ secrets.CONNECTIONSTRINGS__ACTIVECONNECTION }}" \
-#                "ConnectionStrings__RedisConnection=${{ secrets.CONNECTIONSTRINGS__REDISCONNECTION }}" \
-#                "DabJwt__RsaPrivateKeyPemBase64=${{ secrets.ENTRA_JWT_ISSUER }}" 
+      - name: Set Connection String Secret
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            az containerapp secret set \
+              --name ${{ env.CONTAINER_APP_NAME }} \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --secrets \
+                "ConnectionStrings__ActiveConnection=${{ secrets.CONNECTIONSTRINGS__ACTIVECONNECTION }}" \
+                "ConnectionStrings__RedisConnection=${{ secrets.CONNECTIONSTRINGS__REDISCONNECTION }}" \
+                "DabJwt__RsaPrivateKeyPemBase64=${{ secrets.ENTRA_JWT_ISSUER }}" 
 
-#      - name: Deploy to Azure Container Apps
-#        uses: azure/container-apps-deploy-action@v1
-#        with:
-#          imageToDeploy: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.CONTAINER_APP_NAME }}:latest
-#          resourceGroup: ${{ env.RESOURCE_GROUP }}
-#          containerAppName: ${{ env.CONTAINER_APP_NAME }}
-#          containerAppEnvironment: ${{ env.APP_ENVIRONMENT }}
-#          environmentVariables: >-
-#            ENTRA_JWT_ISSUER=${{ secrets.ENTRA_JWT_ISSUER }}
-#            DB_CONNECTION_STRING=secretref:db-conn
+      - name: Deploy to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          imageToDeploy: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.ACR_REPOSITORY_NAME }}:latest
+          resourceGroup: ${{ env.RESOURCE_GROUP }}
+          containerAppName: ${{ env.CONTAINER_APP_NAME }}
+          containerAppEnvironment: ${{ env.APP_ENVIRONMENT }}
+          environmentVariables: >-
+            ConnectionStrings__ActiveConnection=secretref:ConnectionStrings__ActiveConnection
+            ConnectionStrings__RedisConnection=secretref:ConnectionStrings__RedisConnection
+            McpProxy__DestinationUrl=${{ secrets.MCPPROXY__DESTINATIONURL }}
+            DabJwt__Issuer=${{ secrets.DABJWT__ISSUER }}
+            DabJwt__RsaPrivateKeyPemBase64=secretref:DabJwt__RsaPrivateKeyPemBase64

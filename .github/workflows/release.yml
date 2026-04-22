@@ -3,18 +3,22 @@ name: Deploy to Azure Container Apps
 on:
   workflow_dispatch:
   push:
-    branches: [release]
+    branches: [master, release]
 
 env:
   AZURE_CONTAINER_REGISTRY: orderease
   ACR_REPOSITORY_NAME: oe-mcp-auth
   RESOURCE_GROUP: dashboards
   APP_ENVIRONMENT: oe-sales-dashboards
-  CONTAINER_APP_NAME: oe-mcp-auth-staging
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'master' && 'staging' || 'production' }}
+
+    env:
+      CONTAINER_APP_NAME: ${{ github.ref_name == 'master' && 'oe-mcp-auth-staging' || 'oe-mcp-auth-production' }}
+      IMAGE_TAG: ${{ github.ref_name == 'master' && 'staging' || 'production' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -33,18 +37,16 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.ACR_REPOSITORY_NAME }}:latest
+          tags: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.ACR_REPOSITORY_NAME }}:${{ env.IMAGE_TAG }}
           file: Dockerfile
           provenance: false
-#          build-args: |
-#            arg=${{ secrets.SECRET_NAME }}
 
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set Connection String Secret
+      - name: Set container secrets
         uses: azure/CLI@v2
         with:
           inlineScript: |
@@ -59,7 +61,7 @@ jobs:
       - name: Deploy to Azure Container Apps
         uses: azure/container-apps-deploy-action@v1
         with:
-          imageToDeploy: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.ACR_REPOSITORY_NAME }}:latest
+          imageToDeploy: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.ACR_REPOSITORY_NAME }}:${{ env.IMAGE_TAG }}
           resourceGroup: ${{ env.RESOURCE_GROUP }}
           containerAppName: ${{ env.CONTAINER_APP_NAME }}
           containerAppEnvironment: ${{ env.APP_ENVIRONMENT }}

@@ -39,17 +39,9 @@ public class UserRepository : IUserRepository
         // Table: [dbo].[UserAccessTokens] — EF entity: UserAccessToken (DbSet name in context)
         //   Columns used: UserId (int FK → Users.Id), Token (uniqueidentifier), Expiry (datetime)
         const string sql = """
-            SELECT TOP 1 u.Id, u.CompanyId
-            FROM   [dbo].[Users] u
-            WHERE  u.ApiKey = @key
-
-            UNION
-
-            SELECT TOP 1 u.Id, u.CompanyId
-            FROM   [dbo].[Users] u
-            INNER JOIN [dbo].[UserAccessTokens] uat ON uat.UserId = u.Id
-            WHERE  uat.Token  = @key
-              AND  uat.Expiry > GETUTCDATE()
+            SELECT TOP 1 u.Id, u.CompanyId 
+                FROM  mcpadmin.UserLogin u
+                WHERE ApiKey = @key
             """;
 
         await using var conn = new SqlConnection(_connectionString);

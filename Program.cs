@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
 using OrderEase.DabProxy.Data;
 using OrderEase.DabProxy.Services;
+using Yarp.ReverseProxy.Transforms;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -95,7 +96,18 @@ var clusters = new[]
     }
 };
 
-builder.Services.AddReverseProxy().LoadFromMemory(routes, clusters);
+builder.Services.AddReverseProxy()
+    .LoadFromMemory(routes, clusters)
+    .AddTransforms(ctx =>
+    {
+        ctx.AddRequestTransform(transform =>
+        {
+            var userRole = transform.HttpContext.User.FindFirst("userRole")?.Value;
+            if (!string.IsNullOrEmpty(userRole))
+                transform.ProxyRequest.Headers.TryAddWithoutValidation("X-MS-API-ROLE", userRole);
+            return ValueTask.CompletedTask;
+        });
+    });
 
 // ── Build ───────────────────────────────────────────────────────────────────
 var app = builder.Build();

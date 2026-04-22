@@ -37,7 +37,7 @@ public class OidcController : ControllerBase
     [HttpGet(".well-known/openid-configuration")]
     public IActionResult GetOpenIdConfiguration()
     {
-        var baseUrl = $"http://{Request.Host}";
+        var baseUrl = $"https://{Request.Host}";
         var config  = _tokenService.GetOpenIdConfiguration(baseUrl);
 
         return Ok(new
@@ -87,7 +87,7 @@ public class OidcController : ControllerBase
     [HttpGet(".well-known/oauth-protected-resource/mcp")]
     public IActionResult GetMcpProtectedResourceMetadata()
     {
-        var baseUrl = $"http://{Request.Host}";
+        var baseUrl = $"https://{Request.Host}";
         return Ok(new
         {
             resource                  = $"{baseUrl}/mcp",

@@ -1,8 +1,11 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using OrderEase.DabProxy.Data;
+using OrderEase.DabProxy.HealthChecks;
 using OrderEase.DabProxy.Services;
+using System.Threading.RateLimiting;
 using Yarp.ReverseProxy.Transforms;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -43,6 +46,29 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddAuthorization();
+
+// ── Health checks ────────────────────────────────────────────────────────────
+// /health — liveness (app is running)
+// /ready  — readiness (SQL + Redis reachable); used by Azure Container Apps probes
+builder.Services.AddHealthChecks()
+    .AddCheck<SqlHealthCheck>("sql", tags: ["ready"])
+    .AddCheck<RedisHealthCheck>("redis", tags: ["ready"]);
+
+// ── Rate limiting — 5 attempts per 10 minutes per IP on /oauth/authorize POST ─
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("authorize", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                Window = TimeSpan.FromMinutes(10),
+                SegmentsPerWindow = 10,
+                PermitLimit = 5,
+                QueueLimit = 0,
+            }));
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+});
 
 // ── CORS — browser-based MCP clients (e.g. MCP Inspector) make cross-origin
 //    requests to these endpoints, so we allow any origin without credentials.
@@ -123,11 +149,23 @@ var forwardedOptions = new ForwardedHeadersOptions
 forwardedOptions.KnownIPNetworks.Clear();
 forwardedOptions.KnownProxies.Clear();
 app.UseForwardedHeaders(forwardedOptions);
+app.UseRateLimiter();
 
 app.UseCors(CorsPolicyName);
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapReverseProxy();
+app.MapHealthChecks("/health").AllowAnonymous();
+app.MapHealthChecks("/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = r => r.Tags.Contains("ready"),
+    ResultStatusCodes =
+    {
+        [HealthStatus.Healthy]   = StatusCodes.Status200OK,
+        [HealthStatus.Degraded]  = StatusCodes.Status200OK,
+        [HealthStatus.Unhealthy] = StatusCodes.Status503ServiceUnavailable,
+    }
+}).AllowAnonymous();
 
 app.Run();

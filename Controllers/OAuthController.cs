@@ -204,7 +204,7 @@ public class OAuthController : ControllerBase
         {
             access_token = accessToken,
             token_type   = "Bearer",
-            expires_in   = 3600,
+            expires_in   = 157_680_000,
         });
     }
 

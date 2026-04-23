@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Caching.Distributed;
 using OrderEase.DabProxy.Data;
 using OrderEase.DabProxy.Services;
+using Polly;
 using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -26,17 +27,20 @@ public class OAuthController : ControllerBase
     private readonly IUserRepository _users;
     private readonly IEntraIdTokenService _tokenService;
     private readonly ILogger<OAuthController> _logger;
+    private readonly ResiliencePipeline _redisPipeline;
 
     public OAuthController(
         IDistributedCache cache,
         IUserRepository users,
         IEntraIdTokenService tokenService,
-        ILogger<OAuthController> logger)
+        ILogger<OAuthController> logger,
+        [FromKeyedServices("redis")] ResiliencePipeline redisPipeline)
     {
-        _cache        = cache;
-        _users        = users;
-        _tokenService = tokenService;
-        _logger       = logger;
+        _cache         = cache;
+        _users         = users;
+        _tokenService  = tokenService;
+        _logger        = logger;
+        _redisPipeline = redisPipeline;
     }
 
     /// <summary>
@@ -110,11 +114,12 @@ public class OAuthController : ControllerBase
             codeChallenge, codeChallengeMethod ?? "S256",
             resource);
 
-        await _cache.SetAsync(
-            $"oauth_code:{code}",
-            JsonSerializer.SerializeToUtf8Bytes(entry),
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CodeLifetime },
-            ct);
+        await _redisPipeline.ExecuteAsync(async innerCt =>
+            await _cache.SetAsync(
+                $"oauth_code:{code}",
+                JsonSerializer.SerializeToUtf8Bytes(entry),
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CodeLifetime },
+                innerCt), ct);
 
         _logger.LogInformation("AUTH_CODE_ISSUED userId={UserId} companyId={CompanyId} clientId={ClientId} ip={Ip}",
             user.Id, user.CompanyId, clientId, ip);
@@ -152,14 +157,17 @@ public class OAuthController : ControllerBase
 
         var ip      = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         var cacheKey    = $"oauth_code:{code}";
-        var cachedBytes = await _cache.GetAsync(cacheKey, ct);
+        var cachedBytes = await _redisPipeline.ExecuteAsync(
+            async innerCt => await _cache.GetAsync(cacheKey, innerCt), ct);
+
         if (cachedBytes is null)
         {
             _logger.LogWarning("TOKEN_CODE_NOT_FOUND clientId={ClientId} ip={Ip}", clientId, ip);
             return BadRequest(new { error = "invalid_grant", error_description = "Authorization code not found or expired." });
         }
 
-        await _cache.RemoveAsync(cacheKey, ct);
+        await _redisPipeline.ExecuteAsync(async innerCt =>
+            await _cache.RemoveAsync(cacheKey, innerCt), ct);
 
         var entry = JsonSerializer.Deserialize<AuthCodeEntry>(cachedBytes)!;
 
@@ -218,11 +226,12 @@ public class OAuthController : ControllerBase
 
         var clientId = Guid.NewGuid().ToString("N");
 
-        await _cache.SetAsync(
-            $"oauth_client:{clientId}",
-            JsonSerializer.SerializeToUtf8Bytes(new { clientId, request.RedirectUris, request.ClientName }),
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = ClientLifetime },
-            ct);
+        await _redisPipeline.ExecuteAsync(async innerCt =>
+            await _cache.SetAsync(
+                $"oauth_client:{clientId}",
+                JsonSerializer.SerializeToUtf8Bytes(new { clientId, request.RedirectUris, request.ClientName }),
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = ClientLifetime },
+                innerCt), ct);
 
         return Ok(new
         {

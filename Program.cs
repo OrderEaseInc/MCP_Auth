@@ -1,10 +1,15 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using OrderEase.DabProxy.Data;
 using OrderEase.DabProxy.HealthChecks;
 using OrderEase.DabProxy.Services;
+using Polly;
+using Polly.CircuitBreaker;
+using Polly.Retry;
+using StackExchange.Redis;
 using System.Threading.RateLimiting;
 using Yarp.ReverseProxy.Transforms;
 
@@ -46,6 +51,59 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddAuthorization();
+
+// ── Resilience pipelines (Polly) ─────────────────────────────────────────────
+// Pipelines are built as singletons so the circuit-breaker state is shared
+// across all consumers (UserRepository and SqlHealthCheck share one SQL circuit;
+// OAuthController and RedisHealthCheck share one Redis circuit).
+var sqlPipeline = new ResiliencePipelineBuilder()
+    .AddRetry(new Polly.Retry.RetryStrategyOptions
+    {
+        ShouldHandle = new PredicateBuilder()
+            .Handle<SqlException>(ex => ex.IsTransient)
+            .Handle<TimeoutException>(),
+        MaxRetryAttempts = 3,
+        Delay            = TimeSpan.FromMilliseconds(200),
+        BackoffType      = DelayBackoffType.Exponential,
+        UseJitter        = true,
+    })
+    .AddCircuitBreaker(new Polly.CircuitBreaker.CircuitBreakerStrategyOptions
+    {
+        ShouldHandle = new PredicateBuilder()
+            .Handle<SqlException>(ex => ex.IsTransient)
+            .Handle<TimeoutException>(),
+        FailureRatio      = 0.5,
+        SamplingDuration  = TimeSpan.FromSeconds(30),
+        MinimumThroughput = 5,
+        BreakDuration     = TimeSpan.FromSeconds(15),
+    })
+    .Build();
+
+var redisPipeline = new ResiliencePipelineBuilder()
+    .AddRetry(new Polly.Retry.RetryStrategyOptions
+    {
+        ShouldHandle = new PredicateBuilder()
+            .Handle<RedisConnectionException>()
+            .Handle<RedisTimeoutException>(),
+        MaxRetryAttempts = 2,
+        Delay            = TimeSpan.FromMilliseconds(100),
+        BackoffType      = DelayBackoffType.Exponential,
+        UseJitter        = true,
+    })
+    .AddCircuitBreaker(new Polly.CircuitBreaker.CircuitBreakerStrategyOptions
+    {
+        ShouldHandle = new PredicateBuilder()
+            .Handle<RedisConnectionException>()
+            .Handle<RedisTimeoutException>(),
+        FailureRatio      = 0.5,
+        SamplingDuration  = TimeSpan.FromSeconds(30),
+        MinimumThroughput = 3,
+        BreakDuration     = TimeSpan.FromSeconds(10),
+    })
+    .Build();
+
+builder.Services.AddKeyedSingleton<ResiliencePipeline>("sql",   sqlPipeline);
+builder.Services.AddKeyedSingleton<ResiliencePipeline>("redis", redisPipeline);
 
 // ── Health checks ────────────────────────────────────────────────────────────
 // /health — liveness (app is running)

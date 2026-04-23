@@ -6,6 +6,7 @@ using Moq;
 using OrderEase.DabProxy.Controllers;
 using OrderEase.DabProxy.Data;
 using OrderEase.DabProxy.Services;
+using Polly;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -45,7 +46,8 @@ public class OAuthControllerTests
 
         _controller = new OAuthController(
             _cache.Object, _users.Object, _tokenService.Object,
-            NullLogger<OAuthController>.Instance)
+            NullLogger<OAuthController>.Instance,
+            ResiliencePipeline.Empty)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

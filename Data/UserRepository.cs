@@ -1,6 +1,7 @@
 #nullable enable
 
 using Microsoft.Data.SqlClient;
+using Polly;
 
 namespace OrderEase.DabProxy.Data;
 
@@ -17,12 +18,16 @@ public interface IUserRepository
 public class UserRepository : IUserRepository
 {
     private readonly string _connectionString;
+    private readonly ResiliencePipeline _sqlPipeline;
 
-    public UserRepository(IConfiguration configuration)
+    public UserRepository(
+        IConfiguration configuration,
+        [FromKeyedServices("sql")] ResiliencePipeline sqlPipeline)
     {
         // Database connection: ConnectionStrings:ActiveConnection (env: ConnectionStrings__ActiveConnection)
         _connectionString = configuration["ConnectionStrings:ActiveConnection"]
             ?? throw new InvalidOperationException("ConnectionStrings:ActiveConnection is required.");
+        _sqlPipeline = sqlPipeline;
     }
 
     /// <summary>
@@ -39,23 +44,26 @@ public class UserRepository : IUserRepository
         // Table: [dbo].[UserAccessTokens] — EF entity: UserAccessToken (DbSet name in context)
         //   Columns used: UserId (int FK → Users.Id), Token (uniqueidentifier), Expiry (datetime)
         const string sql = """
-            SELECT TOP 1 u.Id, u.CompanyId 
+            SELECT TOP 1 u.Id, u.CompanyId
                 FROM  mcpadmin.UserLogin u
                 WHERE ApiKey = @key
             """;
 
-        await using var conn = new SqlConnection(_connectionString);
-        await conn.OpenAsync(ct);
+        return await _sqlPipeline.ExecuteAsync<UserLookupResult?>(async innerCt =>
+        {
+            await using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync(innerCt);
 
-        await using var cmd = new SqlCommand(sql, conn);
-        cmd.Parameters.Add(new SqlParameter("@key", System.Data.SqlDbType.UniqueIdentifier) { Value = apiKey });
+            await using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.Add(new SqlParameter("@key", System.Data.SqlDbType.UniqueIdentifier) { Value = apiKey });
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
-            return null;
+            await using var reader = await cmd.ExecuteReaderAsync(innerCt);
+            if (!await reader.ReadAsync(innerCt))
+                return null;
 
-        return new UserLookupResult(
-            Id:        reader.GetInt32(0),
-            CompanyId: reader.GetInt32(1));
+            return new UserLookupResult(
+                Id:        reader.GetInt32(0),
+                CompanyId: reader.GetInt32(1));
+        }, ct);
     }
 }

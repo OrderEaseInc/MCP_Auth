@@ -19,10 +19,12 @@ public class OidcController : ControllerBase
     private const int AdminCompanyId = 1;
 
     private readonly IEntraIdTokenService _tokenService;
+    private readonly ILogger<OidcController> _logger;
 
-    public OidcController(IEntraIdTokenService tokenService)
+    public OidcController(IEntraIdTokenService tokenService, ILogger<OidcController> logger)
     {
         _tokenService = tokenService;
+        _logger       = logger;
     }
 
     // ------------------------------------------------------------------ //
@@ -126,6 +128,9 @@ public class OidcController : ControllerBase
             userIdStr,
             companyId == AdminCompanyId ? "admin" : "user",
             extraClaims);
+
+        _logger.LogInformation("TOKEN_ISSUED userId={UserId} companyId={CompanyId} ip={Ip}",
+            userIdStr, companyIdStr, HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown");
 
         return Ok(new { access_token = token, token_type = "Bearer" });
     }

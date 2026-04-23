@@ -1,8 +1,16 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using OrderEase.DabProxy.Data;
+using OrderEase.DabProxy.HealthChecks;
 using OrderEase.DabProxy.Services;
+using Polly;
+using Polly.CircuitBreaker;
+using Polly.Retry;
+using StackExchange.Redis;
+using System.Threading.RateLimiting;
 using Yarp.ReverseProxy.Transforms;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -43,6 +51,82 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddAuthorization();
+
+// ── Resilience pipelines (Polly) ─────────────────────────────────────────────
+// Pipelines are built as singletons so the circuit-breaker state is shared
+// across all consumers (UserRepository and SqlHealthCheck share one SQL circuit;
+// OAuthController and RedisHealthCheck share one Redis circuit).
+var sqlPipeline = new ResiliencePipelineBuilder()
+    .AddRetry(new Polly.Retry.RetryStrategyOptions
+    {
+        ShouldHandle = new PredicateBuilder()
+            .Handle<SqlException>(ex => ex.IsTransient)
+            .Handle<TimeoutException>(),
+        MaxRetryAttempts = 3,
+        Delay            = TimeSpan.FromMilliseconds(200),
+        BackoffType      = DelayBackoffType.Exponential,
+        UseJitter        = true,
+    })
+    .AddCircuitBreaker(new Polly.CircuitBreaker.CircuitBreakerStrategyOptions
+    {
+        ShouldHandle = new PredicateBuilder()
+            .Handle<SqlException>(ex => ex.IsTransient)
+            .Handle<TimeoutException>(),
+        FailureRatio      = 0.5,
+        SamplingDuration  = TimeSpan.FromSeconds(30),
+        MinimumThroughput = 5,
+        BreakDuration     = TimeSpan.FromSeconds(15),
+    })
+    .Build();
+
+var redisPipeline = new ResiliencePipelineBuilder()
+    .AddRetry(new Polly.Retry.RetryStrategyOptions
+    {
+        ShouldHandle = new PredicateBuilder()
+            .Handle<RedisConnectionException>()
+            .Handle<RedisTimeoutException>(),
+        MaxRetryAttempts = 2,
+        Delay            = TimeSpan.FromMilliseconds(100),
+        BackoffType      = DelayBackoffType.Exponential,
+        UseJitter        = true,
+    })
+    .AddCircuitBreaker(new Polly.CircuitBreaker.CircuitBreakerStrategyOptions
+    {
+        ShouldHandle = new PredicateBuilder()
+            .Handle<RedisConnectionException>()
+            .Handle<RedisTimeoutException>(),
+        FailureRatio      = 0.5,
+        SamplingDuration  = TimeSpan.FromSeconds(30),
+        MinimumThroughput = 3,
+        BreakDuration     = TimeSpan.FromSeconds(10),
+    })
+    .Build();
+
+builder.Services.AddKeyedSingleton<ResiliencePipeline>("sql",   sqlPipeline);
+builder.Services.AddKeyedSingleton<ResiliencePipeline>("redis", redisPipeline);
+
+// ── Health checks ────────────────────────────────────────────────────────────
+// /health — liveness (app is running)
+// /ready  — readiness (SQL + Redis reachable); used by Azure Container Apps probes
+builder.Services.AddHealthChecks()
+    .AddCheck<SqlHealthCheck>("sql", tags: ["ready"])
+    .AddCheck<RedisHealthCheck>("redis", tags: ["ready"]);
+
+// ── Rate limiting — 5 attempts per 10 minutes per IP on /oauth/authorize POST ─
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("authorize", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                Window = TimeSpan.FromMinutes(10),
+                SegmentsPerWindow = 10,
+                PermitLimit = 5,
+                QueueLimit = 0,
+            }));
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+});
 
 // ── CORS — browser-based MCP clients (e.g. MCP Inspector) make cross-origin
 //    requests to these endpoints, so we allow any origin without credentials.
@@ -123,11 +207,23 @@ var forwardedOptions = new ForwardedHeadersOptions
 forwardedOptions.KnownIPNetworks.Clear();
 forwardedOptions.KnownProxies.Clear();
 app.UseForwardedHeaders(forwardedOptions);
+app.UseRateLimiter();
 
 app.UseCors(CorsPolicyName);
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapReverseProxy();
+app.MapHealthChecks("/health").AllowAnonymous();
+app.MapHealthChecks("/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = r => r.Tags.Contains("ready"),
+    ResultStatusCodes =
+    {
+        [HealthStatus.Healthy]   = StatusCodes.Status200OK,
+        [HealthStatus.Degraded]  = StatusCodes.Status200OK,
+        [HealthStatus.Unhealthy] = StatusCodes.Status503ServiceUnavailable,
+    }
+}).AllowAnonymous();
 
 app.Run();

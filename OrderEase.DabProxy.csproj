@@ -11,11 +11,19 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="OrderEase.DabProxy.Tests\**" />
+    <Content Remove="OrderEase.DabProxy.Tests\**" />
+    <EmbeddedResource Remove="OrderEase.DabProxy.Tests\**" />
+    <None Remove="OrderEase.DabProxy.Tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.*" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="5.*" />
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.*" />
     <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.*" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.*" />
+    <PackageReference Include="Polly.Core" Version="8.*" />
     <PackageReference Include="Yarp.ReverseProxy" Version="2.*" />
   </ItemGroup>
 

@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Caching.Distributed;
 using OrderEase.DabProxy.Data;
 using OrderEase.DabProxy.Services;
+using Polly;
 using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -24,15 +26,21 @@ public class OAuthController : ControllerBase
     private readonly IDistributedCache _cache;
     private readonly IUserRepository _users;
     private readonly IEntraIdTokenService _tokenService;
+    private readonly ILogger<OAuthController> _logger;
+    private readonly ResiliencePipeline _redisPipeline;
 
     public OAuthController(
         IDistributedCache cache,
         IUserRepository users,
-        IEntraIdTokenService tokenService)
+        IEntraIdTokenService tokenService,
+        ILogger<OAuthController> logger,
+        [FromKeyedServices("redis")] ResiliencePipeline redisPipeline)
     {
-        _cache        = cache;
-        _users        = users;
-        _tokenService = tokenService;
+        _cache         = cache;
+        _users         = users;
+        _tokenService  = tokenService;
+        _logger        = logger;
+        _redisPipeline = redisPipeline;
     }
 
     /// <summary>
@@ -66,6 +74,7 @@ public class OAuthController : ControllerBase
     /// in the distributed cache, then redirects to the client's redirect_uri.
     /// </summary>
     [AllowAnonymous]
+    [EnableRateLimiting("authorize")]
     [HttpPost("oauth/authorize")]
     [Consumes("application/x-www-form-urlencoded")]
     public async Task<IActionResult> AuthorizePost(
@@ -78,17 +87,25 @@ public class OAuthController : ControllerBase
         [FromForm(Name = "resource")]                string? resource = null,
         CancellationToken ct = default)
     {
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
         if (!Guid.TryParse(apiKey?.Trim(), out var guidKey))
+        {
+            _logger.LogWarning("AUTH_INVALID_KEY_FORMAT clientId={ClientId} ip={Ip}", clientId, ip);
             return Content(
                 BuildLoginHtml(clientId, redirectUri, codeChallenge, codeChallengeMethod, state, resource, "Invalid API key format."),
                 "text/html");
+        }
 
         var user = await _users.FindByApiKeyAsync(guidKey, ct);
 
         if (user is null)
+        {
+            _logger.LogWarning("AUTH_KEY_NOT_FOUND clientId={ClientId} ip={Ip}", clientId, ip);
             return Content(
                 BuildLoginHtml(clientId, redirectUri, codeChallenge, codeChallengeMethod, state, resource, "API key not recognised."),
                 "text/html");
+        }
 
         var code  = Guid.NewGuid().ToString("N");
         var entry = new AuthCodeEntry(
@@ -97,11 +114,15 @@ public class OAuthController : ControllerBase
             codeChallenge, codeChallengeMethod ?? "S256",
             resource);
 
-        await _cache.SetAsync(
-            $"oauth_code:{code}",
-            JsonSerializer.SerializeToUtf8Bytes(entry),
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CodeLifetime },
-            ct);
+        await _redisPipeline.ExecuteAsync(async innerCt =>
+            await _cache.SetAsync(
+                $"oauth_code:{code}",
+                JsonSerializer.SerializeToUtf8Bytes(entry),
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CodeLifetime },
+                innerCt), ct);
+
+        _logger.LogInformation("AUTH_CODE_ISSUED userId={UserId} companyId={CompanyId} clientId={ClientId} ip={Ip}",
+            user.Id, user.CompanyId, clientId, ip);
 
         var callback    = $"{redirectUri}?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state ?? "")}";
         var callbackJson = JsonSerializer.Serialize(callback);
@@ -134,21 +155,36 @@ public class OAuthController : ControllerBase
         if (grantType != "authorization_code")
             return BadRequest(new { error = "unsupported_grant_type" });
 
+        var ip      = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         var cacheKey    = $"oauth_code:{code}";
-        var cachedBytes = await _cache.GetAsync(cacheKey, ct);
-        if (cachedBytes is null)
-            return BadRequest(new { error = "invalid_grant", error_description = "Authorization code not found or expired." });
+        var cachedBytes = await _redisPipeline.ExecuteAsync(
+            async innerCt => await _cache.GetAsync(cacheKey, innerCt), ct);
 
-        await _cache.RemoveAsync(cacheKey, ct);
+        if (cachedBytes is null)
+        {
+            _logger.LogWarning("TOKEN_CODE_NOT_FOUND clientId={ClientId} ip={Ip}", clientId, ip);
+            return BadRequest(new { error = "invalid_grant", error_description = "Authorization code not found or expired." });
+        }
+
+        await _redisPipeline.ExecuteAsync(async innerCt =>
+            await _cache.RemoveAsync(cacheKey, innerCt), ct);
 
         var entry = JsonSerializer.Deserialize<AuthCodeEntry>(cachedBytes)!;
 
         if (entry.ClientId != clientId || entry.RedirectUri != redirectUri)
+        {
+            _logger.LogWarning("TOKEN_CLIENT_MISMATCH userId={UserId} clientId={ClientId} ip={Ip}",
+                entry.UserId, clientId, ip);
             return BadRequest(new { error = "invalid_grant", error_description = "client_id or redirect_uri mismatch." });
+        }
 
         if (!string.IsNullOrEmpty(entry.CodeChallenge) &&
             !VerifyPkce(codeVerifier, entry.CodeChallenge, entry.CodeChallengeMethod))
+        {
+            _logger.LogWarning("TOKEN_PKCE_FAILED userId={UserId} clientId={ClientId} ip={Ip}",
+                entry.UserId, clientId, ip);
             return BadRequest(new { error = "invalid_grant", error_description = "PKCE verification failed." });
+        }
 
         var extraClaims = new[]
         {
@@ -160,6 +196,9 @@ public class OAuthController : ControllerBase
             entry.UserId.ToString(),
             entry.CompanyId == AdminCompanyId ? "admin" : "user",
             extraClaims);
+
+        _logger.LogInformation("TOKEN_ISSUED userId={UserId} companyId={CompanyId} clientId={ClientId} ip={Ip}",
+            entry.UserId, entry.CompanyId, clientId, ip);
 
         return Ok(new
         {
@@ -187,11 +226,12 @@ public class OAuthController : ControllerBase
 
         var clientId = Guid.NewGuid().ToString("N");
 
-        await _cache.SetAsync(
-            $"oauth_client:{clientId}",
-            JsonSerializer.SerializeToUtf8Bytes(new { clientId, request.RedirectUris, request.ClientName }),
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = ClientLifetime },
-            ct);
+        await _redisPipeline.ExecuteAsync(async innerCt =>
+            await _cache.SetAsync(
+                $"oauth_client:{clientId}",
+                JsonSerializer.SerializeToUtf8Bytes(new { clientId, request.RedirectUris, request.ClientName }),
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = ClientLifetime },
+                innerCt), ct);
 
         return Ok(new
         {

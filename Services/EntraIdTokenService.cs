@@ -35,7 +35,7 @@ public class EntraIdTokenService : IEntraIdTokenService, IDisposable
 
         _issuer        = section["Issuer"]        ?? "https://api.orderease.com";
         _audience      = section["Audience"]      ?? "dab";
-        _expiryMinutes = section.GetValue<int?>("ExpiryMinutes") ?? 60;
+        _expiryMinutes = section.GetValue<int?>("ExpiryMinutes") ?? 2628000;
 
         // DabJwt:RsaPrivateKeyPemBase64 — base64-encoded raw PKCS#8 DER private key bytes.
         // Generate with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 | openssl pkcs8 -topk8 -nocrypt -outform DER | base64 -w0
